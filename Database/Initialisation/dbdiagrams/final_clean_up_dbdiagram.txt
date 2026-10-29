@@ -1,0 +1,169 @@
+// Final database vision (database Holdings_v2, schema clean_up_1). Paste into https://dbdiagram.io
+//
+//   1_holdings_pipeline.ipynb        -> holdings_clean
+//   2_f13_securities_pipeline.ipynb  -> asset
+//   3_openfigi_pipeline.ipynb        -> FIGI columns of asset
+//   4_owner_pipeline.ipynb           -> edgar_company, edgar_company_name
+//   5_industry_pipeline.ipynb        -> issuer columns of asset, ff_industry, sic_ff
+//
+// Industry classification: asset.issuer_cik -> edgar_company.sic -> sic_ff (pick the scheme) -> ff_industry.
+//   e.g. FF12:  JOIN sic_ff f ON f.sic = c.sic AND f.scheme = 12
+//               JOIN ff_industry i USING (scheme, industry_number)
+//
+// Foreign keys: edgar_company_name.cik -> edgar_company.cik, sic_ff -> ff_industry;
+// the other references are logical joins (not enforced).
+
+Project Holdings_v2 {
+  database_type: 'PostgreSQL'
+  Note: '13F holdings 1999-2020: who (owner, edgar_company) holds what (asset), per report date (holdings_clean), classified into Fama-French industries'
+}
+
+TableGroup holdings {
+  clean_up_1.holdings_clean
+}
+
+TableGroup securities {
+  clean_up_1.asset
+}
+
+TableGroup companies {
+  clean_up_1.edgar_company
+  clean_up_1.edgar_company_name
+}
+
+TableGroup industries {
+  clean_up_1.ff_industry
+  clean_up_1.sic_ff
+}
+
+Table clean_up_1.holdings_clean {
+  cik                   integer            [not null, note: 'owner CIK']
+  rdate                 date               [not null, note: 'report date (quarter end)']
+  fdate                 date               [not null, note: 'filing date']
+  cusip9                char(9)            [not null]
+  name_of_issuer        text
+  title_of_class        text
+  value                 numeric(20,5)      [not null, note: 'CHECK <> 0, finite']
+  shrs_or_prn_amt       varchar(3)         [note: 'SH / PRN']
+  shares                numeric(21,3)      [not null, note: 'CHECK <> 0, finite']
+  investment_discretion varchar(20)
+  voting_authority      text
+  permno                integer            [note: 'CRSP PERMNO']
+  prc                   "double precision" [not null, note: 'CHECK <> 0, finite']
+  shrout                integer            [note: 'shares outstanding, thousands']
+  split                 boolean
+  deviation             "double precision"
+  form                  varchar(20)        [note: '13F-HR / 13F-HR/A']
+  type                  varchar(10)
+  address               varchar(64)        [note: 'filing path, identifies the filing']
+  amendment_type        varchar(16)        [note: 'RESTATEMENT / NEW HOLDINGS for 13F-HR/A']
+
+  indexes {
+    cik     [name: 'idx_holdings_cik']
+    cusip9  [name: 'idx_holdings_cusip9']
+    rdate   [name: 'idx_holdings_rdate']
+    address [name: 'idx_holdings_address']
+  }
+
+  Note: 'One row per holding of a 13F filing, after CUSIP, value, amendment and ownership cleaning (~101.6M rows)'
+}
+
+Table clean_up_1.asset {
+  cusip              varchar(9)  [pk]
+  issuer_name        text
+  issuer_description text
+  first_year         smallint    [not null]
+  first_quarter      smallint    [not null, note: 'CHECK 1-4']
+  last_year          smallint    [not null, note: 'CHECK (first_year, first_quarter) <= (last_year, last_quarter)']
+  last_quarter       smallint    [not null, note: 'CHECK 1-4']
+  quarters_listed    smallint    [not null]
+  quarters_missing   smallint    [not null]
+  figi               char(12)    [note: 'OpenFIGI']
+  share_class_figi   char(12)    [note: 'OpenFIGI']
+  figi_ticker        text        [note: 'OpenFIGI']
+  figi_name          text        [note: 'OpenFIGI']
+  figi_exch_code     text        [note: 'OpenFIGI']
+  market_sector      text        [note: 'OpenFIGI']
+  security_type2     text        [note: 'OpenFIGI']
+  figi_status        text        [note: 'OpenFIGI lookup status']
+  issuer_cik         integer     [note: 'industry: EDGAR CIK of the issuer (industry via edgar_company.sic)']
+  industry_match     text        [note: 'name+ticker / name / name+period / name+same_industry / ambiguous / unmatched']
+
+  indexes {
+    (first_year, first_quarter, last_year, last_quarter) [name: 'asset_first_last_idx']
+    share_class_figi                                     [name: 'asset_share_class_figi_idx']
+    issuer_cik                                           [name: 'asset_issuer_cik_idx']
+  }
+
+  Note: 'One row per CUSIP of the SEC Official List of Section 13(f) Securities (1996-2020), no option (CALL / PUT) CUSIPs (40.6k rows)'
+}
+
+Table clean_up_1.edgar_company {
+  cik             integer    [pk]
+  name            text       [note: 'current EDGAR name']
+  entity_type     text       [note: 'other / operating / investment']
+  sic             varchar(4) [note: 'current SIC; NULL for placeholder 0000']
+  sic_description text
+  ein             char(9)    [note: 'CHECK 9 digits; placeholders -> NULL']
+  lei             char(20)   [note: 'CHECK 20 alphanumeric characters']
+  tickers         "text[]"   [not null, default: `'{}'`, note: 'current tickers']
+  exchanges       "text[]"   [not null, default: `'{}'`, note: 'exchange per ticker']
+  is_owner        boolean    [not null, note: 'CIK has holdings in holdings_clean']
+  is_13f_filler   boolean    [not null, note: 'CIK filed any 13F form (13F-HR, 13F-HR/A, 13F-NT, 13F-NT/A) in EDGAR']
+
+  indexes {
+    name [name: 'edgar_company_name_idx']
+    sic  [name: 'edgar_company_sic_idx']
+  }
+
+  Note: 'One row per EDGAR company: owners (13F filers, holdings CIKs) and issuers (filers with SIC or ticker) (88k rows)'
+}
+
+Table clean_up_1.edgar_company_name {
+  id         bigserial [pk]
+  cik        integer   [not null]
+  name       text      [not null]
+  name_from  date
+  name_to    date      [note: 'NULL for the current name']
+  is_current boolean   [not null]
+
+  indexes {
+    cik [name: 'edgar_company_name_cik_idx']
+  }
+
+  Note: 'Current and former names of a CIK, with the period (EDGAR formerNames) (118k rows)'
+}
+
+Table clean_up_1.ff_industry {
+  scheme            smallint [not null, note: 'CHECK 5 / 10 / 12 / 17 / 30 / 38 / 48 / 49']
+  industry_number   smallint [not null]
+  short_name        text     [not null, note: 'e.g. Banks, Chips']
+  industry_name     text     [not null]
+  residual_category boolean  [not null, note: 'catch-all Other of the scheme (5, 10, 12, 38 only)']
+
+  indexes {
+    (scheme, industry_number) [pk]
+  }
+
+  Note: 'Fama-French industries of every scheme (209 rows; source ff_industries.csv)'
+}
+
+Table clean_up_1.sic_ff {
+  sic             varchar(4) [not null, note: '0000-9999, same format as edgar_company.sic']
+  scheme          smallint   [not null]
+  industry_number smallint   [not null]
+
+  indexes {
+    (sic, scheme)             [pk]
+    (scheme, industry_number) [name: 'sic_ff_industry_idx']
+  }
+
+  Note: 'SIC code -> industry in each Fama-French scheme (~60k rows; source sic_to_ff_lookup.csv). A SIC without a row in a scheme is not classified by it (FF48: 5,054 of 10,000 SIC codes listed)'
+}
+
+Ref: clean_up_1.edgar_company_name.cik > clean_up_1.edgar_company.cik                                 // foreign key
+Ref: clean_up_1.sic_ff.(scheme, industry_number) > clean_up_1.ff_industry.(scheme, industry_number)   // foreign key
+Ref: clean_up_1.holdings_clean.cik > clean_up_1.edgar_company.cik       // logical, owner
+Ref: clean_up_1.asset.issuer_cik > clean_up_1.edgar_company.cik         // logical, issuer
+Ref: clean_up_1.edgar_company.sic <> clean_up_1.sic_ff.sic              // logical, many-to-many: one sic_ff row per scheme
+Ref: clean_up_1.holdings_clean.cusip9 > clean_up_1.asset.cusip          // logical, not every holdings CUSIP is listed

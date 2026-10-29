@@ -1,0 +1,24 @@
+# Machine-specific settings: DB password, local data paths (template: local_config.example.py)
+Initialisation/config/local_config.py
+
+# Loader state: one absolute path per CSV file (~300k lines, ~100 MB), PAUSE file
+Initialisation/data/
+
+# Earlier versions (incl. notebook copies with hardcoded credentials) and run logs are kept locally only
+old/
+Initialisation/logs/
+
+__pycache__/
+.ipynb_checkpoints/
+
+# Amendments: SEC bulk data and intermediate CSVs (~130 MB, rebuilt by the scripts)
+amendments/data/
+
+# 13(f) securities lists: source PDFs (~440 MB), intermediate TXT, OCR cache
+13f_securities/data/pdf/
+13f_securities/data/txt/
+13f_securities/data/ocr_cache/
+
+# Data files (the 13(f) CSVs, the amendment types, the OCR issues log) are too large, stored outside the repo
+*.csv
+*.tsv
